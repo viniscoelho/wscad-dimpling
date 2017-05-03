@@ -337,15 +337,12 @@ int prepare()
             gpu_id+1, resp);
         printf("Copying results...\n");
 
-        #pragma omp barrier
+        #pragma omp critical
         {
-            #pragma omp critical
+            if (resp > finalResp)
             {
-                if (resp > finalResp)
-                {
-                    finalResp = resp;
-                    pos = gpu_id;
-                }
+                finalResp = resp;
+                pos = gpu_id;
             }
         }
 

@@ -1,0 +1,3 @@
+nvcc face-dimple.cu -w -O3
+nvcc face-dimple-sh.cu -w -O3
+nvcc face-dimple-agsh-mgpu.cu -w -Xcompiler -fopenmp -lgomp -O3

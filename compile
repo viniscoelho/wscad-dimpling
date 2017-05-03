@@ -1,0 +1,1 @@
+nvcc face-dimple.cu -w -O3

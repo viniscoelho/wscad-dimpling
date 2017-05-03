@@ -48,7 +48,7 @@ struct Params
     seeds       ---> Permutations of possible starting 4-cliques
     graph       ---> The graph itself
 */
-clock_t start, stop;
+double start, stop;
 int R[MAX][MAX], F[8*MAX], bib[MAX];
 int SIZE, BLOCKS, PERM, qtd = 0;
 
@@ -62,7 +62,7 @@ Node *N;
 #endif
 
 /*
-    Print elapsed time.
+    Prints elapsed time.
     */
 void printElapsedTime(double start, double stop)
 {
@@ -71,7 +71,7 @@ void printElapsedTime(double start, double stop)
 }
 //-----------------------------------------------------------------------------
 /*  
-    Get clock time.
+    Gets clock time.
     */
 void current_utc_time(struct timespec *ts) 
 {
@@ -117,7 +117,7 @@ __device__ void generateVertexList(Node* devN, Params* devP, int t)
     initializes necessary structures, such as the edges indexes,
     and defines which edges belongs to a face.
     */
-__device__ void generateFaceList(Node* devN, Params* devP, int t)
+__device__ void generateFaceList(Node* devN, Params* devP, int graph[], int t)
 {
     int resp = 0, sz = devN->sz;
     int va = devN->seeds[t*4], vb = devN->seeds[t*4 + 1],
@@ -127,7 +127,7 @@ __device__ void generateFaceList(Node* devN, Params* devP, int t)
     devP[t].F[devP[t].faces*3] = va,
     devP[t].F[devP[t].faces*3 + 1] = vb,
     devP[t].F[(devP[t].faces++)*3 + 2] = vc;
-    resp = devN->graph[va*sz + vb] + devN->graph[va*sz + vc] + devN->graph[vb*sz + vc];
+    resp = graph[va*sz + vb] + graph[va*sz + vc] + graph[vb*sz + vc];
 
     // Generate the next 3 possible faces
     devP[t].F[devP[t].faces*3] = va, devP[t].F[devP[t].faces*3 + 1] = vb,
@@ -136,7 +136,7 @@ __device__ void generateFaceList(Node* devN, Params* devP, int t)
         devP[t].F[(devP[t].faces++)*3 + 2] = vd;
     devP[t].F[devP[t].faces*3] = vb, devP[t].F[devP[t].faces*3 + 1] = vc,
         devP[t].F[(devP[t].faces++)*3 + 2] = vd;
-    resp += devN->graph[va*sz + vd] + devN->graph[vb*sz + vd] + devN->graph[vc*sz + vd];
+    resp += graph[va*sz + vd] + graph[vb*sz + vd] + graph[vc*sz + vd];
     devP[t].tmpMax = resp;
 }
 //-----------------------------------------------------------------------------
@@ -144,7 +144,8 @@ __device__ void generateFaceList(Node* devN, Params* devP, int t)
     Inserts a new vertex, 3 new triangular faces
     and removes the face from the list.
     */
-__device__ int faceDimple(Node* devN, Params* devP, int new_vertex, int f, int t)
+__device__ int faceDimple(Node* devN, Params* devP, int new_vertex, int f,
+    int graph[], int t)
 {
     // Remove the chosen face and insert a new one
     int va = devP[t].F[f*3],
@@ -162,21 +163,21 @@ __device__ int faceDimple(Node* devN, Params* devP, int new_vertex, int f, int t
         devP[t].F[(devP[t].faces++)*3 + 2] = vc;
 
     int sz = devN->sz;
-    int resp = devN->graph[va*sz + new_vertex] + devN->graph[vb*sz + new_vertex]
-        + devN->graph[vc*sz + new_vertex];
+    int resp = graph[va*sz + new_vertex] + graph[vb*sz + new_vertex]
+        + graph[vc*sz + new_vertex];
 
     return resp;
 }
 //-----------------------------------------------------------------------------
 /*
-    Return the vertex having the maximum gain
+    Returns the vertex having the maximum gain
     inserting within a face.
     */
-__device__ int maxGainFace(Node* devN, Params* devP, int* f, int t)
+__device__ int maxGainFace(Node* devN, Params* devP, int* f, int graph[], int t)
 {
     int sz = devN->sz;
     int gain = -1, vertex = -1;
-    // Iterate through the remaining vertices.
+    // Iterate through the remaining vertices
     for (int new_vertex = 0; new_vertex < sz; ++new_vertex)
     {
         if (devP[t].V[new_vertex] == -1) continue;
@@ -185,8 +186,8 @@ __device__ int maxGainFace(Node* devN, Params* devP, int* f, int t)
         for (int i = 0; i < faces; ++i)
         {
             int va = devP[t].F[i*3], vb = devP[t].F[i*3 + 1], vc = devP[t].F[i*3 + 2];
-            int tmpGain = devN->graph[va*sz + new_vertex] + devN->graph[vb*sz + new_vertex]
-                + devN->graph[vc*sz + new_vertex];
+            int tmpGain = graph[va*sz + new_vertex] + graph[vb*sz + new_vertex]
+                + graph[vc*sz + new_vertex];
             if (tmpGain > gain)
             {
                 gain = tmpGain;
@@ -198,14 +199,14 @@ __device__ int maxGainFace(Node* devN, Params* devP, int* f, int t)
     return vertex;
 }
 //-----------------------------------------------------------------------------
-__device__ void dimpling(Node* devN, Params* devP, int t)
+__device__ void dimpling(Node* devN, Params* devP, int graph[], int t)
 {
     while (devP[t].count)
     {
         int f = -1;
-        int vertex = maxGainFace(devN, devP, &f, t);
+        int vertex = maxGainFace(devN, devP, &f, graph, t);
         devP[t].V[vertex] = -1;
-        devP[t].tmpMax += faceDimple(devN, devP, vertex, f, t);
+        devP[t].tmpMax += faceDimple(devN, devP, vertex, f, graph, t);
         devP[t].count--;
     }
 }
@@ -222,14 +223,21 @@ __global__ void solve(Node *devN, Params *devP, int *respMax, int *idx)
     int x = blockDim.x*blockIdx.x + threadIdx.x;
     int sz = devN->sz;
     int perm = devN->qtd;
+
+    extern __shared__ int graph[];
+    for (int i = 0; i < sz; ++i)
+        for (int j = i+1; j < sz; ++j){
+            graph[i*sz + j] = devN->graph[i*sz + j];
+            graph[j*sz + i] = devN->graph[j*sz + i];
+        }
     __syncthreads();
 
     if (x < perm)
     {
         initializeDevice(devP, devN->sz, x);
         generateVertexList(devN, devP, x);
-        generateFaceList(devN, devP, x);
-        dimpling(devN, devP, x);
+        generateFaceList(devN, devP, graph, x);
+        dimpling(devN, devP, graph, x);
 
         __syncthreads();
         atomicMax(respMax, devP[x].tmpMax);
@@ -258,7 +266,7 @@ int prepare()
     dim3 blocks(BLOCKS, 1);
     dim3 threads(THREADS, 1);
 
-    solve<<<blocks, threads>>>(devN, devP, tmpResp, tmpIdx);
+    solve<<<blocks, threads, MAXS*sizeof(int)>>>(devN, devP, tmpResp, tmpIdx);
     gpuErrChk(cudaDeviceSynchronize());
 
     gpuErrChk(cudaMemcpy(&resp, tmpResp, sizeof(int), cudaMemcpyDeviceToHost));
@@ -300,11 +308,12 @@ void combine()
 }
 //-----------------------------------------------------------------------------
 /*
-    Define the number of combinations.
+    Defines the number of combinations.
     */
 void sizeDefinitions()
 {
-    for (int i = 6; i <= MAX; ++i){
+    for (int i = 6; i <= MAX; ++i)
+    {
         int resp = 1;
         for (int j = i-3; j <= i; ++j) resp *= j;
         resp /= 24;
@@ -348,7 +357,7 @@ void readInput()
 int main(int argv, char** argc)
 {
     sizeDefinitions();
-    // Read the input, which is given by the size of a graph and its weighted
+    // Reads the input, which is given by the size of a graph and its weighted
     // edges. The given graph should be a complete graph.
     readInput();
     initialize();

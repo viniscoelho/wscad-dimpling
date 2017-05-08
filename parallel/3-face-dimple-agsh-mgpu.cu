@@ -1,7 +1,3 @@
-#include <iostream>
-#include <iomanip>
-#include <algorithm>
-#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -12,7 +8,7 @@
 #define THREADS 1024 // 2^10
 #define MAX 100
 #define MAXS MAX*MAX
-#define PERM_MAX (MAX*(MAX-1)*(MAX-2)*(MAX-3))/24
+#define COMB_MAX (MAX*(MAX-1)*(MAX-2)*(MAX-3))/24
 
 #define gpuErrChk(ans){ gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, char *file, int line, bool abort = true)
@@ -29,40 +25,39 @@ using namespace std;
 
 /*
     sz          ---> Adjacency matrix dimension (1D)
-    perm        ---> Number of permutations of an instance
+    comb        ---> Number of combinations of an instance
     graph       ---> Adjacency matrix itself
     seeds       ---> Set of seeds
-    faces       ---> Set of triangular faces for the output
+    resFaces    ---> Set of triangular faces for the output
 */
 struct Node
 {
-    int sz, perm;
-    int graph[MAXS], seeds[C*PERM_MAX], F_ANS[6*MAX];
+    int sz, comb;
+    int graph[MAXS], seeds[C*COMB_MAX], resFaces[6*MAX];
 };
 
 /*
-    faces       ---> Number of triangular faces
-    count       ---> Number of remaining vertices
+    numFaces    ---> Number of triangular faces
+    remaining   ---> Number of remaining vertices
     tmpMax      ---> Max value obtained for a seed
     F           ---> Set of triangular faces
-    F           ---> Set of remaining vertices
+    V           ---> Set of remaining vertices
 */
 struct Params
 {
-    int *faces, *count, *tmpMax;
+    int *numFaces, *remaining, *tmpMax;
     int *F, *V;
 };
 
 /*
     SIZE        ---> Number of vertices
-    BLOCKS      ---> Number of blocks
-    PERM        ---> Number of permutations
+    COMB        ---> Number of combinations
     R           ---> Output graph for a possible solution
     F           ---> Set of triangular faces of an instance
     qtd         ---> Number of possible 4-cliques
 */
-int SIZE, PERM, GPU_CNT = 1;
-int R[MAXS], F[8 * MAX], bib[MAX];
+int SIZE, COMB, GPU_CNT = 1;
+int R[MAXS], F[8 * MAX], numComb[MAX];
 int qtd = 0;
 
 Node *N;
@@ -114,7 +109,7 @@ double getTime()
     */
 __device__ void generateVertexList(Node* devN, Params* devP, int t, int offset)
 {
-    int sz = devN->sz, perm = devN->perm;
+    int sz = devN->sz, comb = devN->comb;
 
     int va = devN->seeds[(t + offset) * 4],
         vb = devN->seeds[(t + offset) * 4 + 1],
@@ -122,18 +117,18 @@ __device__ void generateVertexList(Node* devN, Params* devP, int t, int offset)
         vd = devN->seeds[(t + offset) * 4 + 3];
     for (int i = 0; i < sz; ++i)
     {
-        if (i == va || i == vb || i == vc || i == vd) devP->V[t + i * perm] = -1;
-        else devP->V[t + i * perm] = i;
+        if (i == va || i == vb || i == vc || i == vd) devP->V[t + i * comb] = -1;
+        else devP->V[t + i * comb] = i;
     }
 }
 //-----------------------------------------------------------------------------
 /*
-    Returns the weight of the planar graph so far
+    Returns the weight of the planar graph so far.
 */
 __device__ void generateFaceList(Node* devN, Params* devP, int graph[], int t,
     int offset)
 {
-    int sz = devN->sz, perm = devN->perm;
+    int sz = devN->sz, comb = devN->comb;
 
     int va = devN->seeds[(t + offset) * 4],
         vb = devN->seeds[(t + offset) * 4 + 1],
@@ -141,26 +136,26 @@ __device__ void generateFaceList(Node* devN, Params* devP, int graph[], int t,
         vd = devN->seeds[(t + offset) * 4 + 3];
 
     // Generate the first triangle of the output graph
-    devP->F[t + (devP->faces[t] * 3) * perm] = va;
-    devP->F[t + (devP->faces[t] * 3 + 1) * perm] = vb;
-    devP->F[t + ((devP->faces[t]++) * 3 + 2) * perm] = vc;
+    devP->F[t + (devP->numFaces[t] * 3) * comb] = va;
+    devP->F[t + (devP->numFaces[t] * 3 + 1) * comb] = vb;
+    devP->F[t + ((devP->numFaces[t]++) * 3 + 2) * comb] = vc;
 
     // Generate the next 3 possible faces
-    devP->F[t + (devP->faces[t] * 3) * perm] = va;
-    devP->F[t + (devP->faces[t] * 3 + 1) * perm] = vb;
-    devP->F[t + ((devP->faces[t]++) * 3 + 2) * perm] = vd;
+    devP->F[t + (devP->numFaces[t] * 3) * comb] = va;
+    devP->F[t + (devP->numFaces[t] * 3 + 1) * comb] = vb;
+    devP->F[t + ((devP->numFaces[t]++) * 3 + 2) * comb] = vd;
 
-    devP->F[t + (devP->faces[t] * 3) * perm] = va;
-    devP->F[t + (devP->faces[t] * 3 + 1) * perm] = vc;
-    devP->F[t + ((devP->faces[t]++) * 3 + 2) * perm] = vd;
+    devP->F[t + (devP->numFaces[t] * 3) * comb] = va;
+    devP->F[t + (devP->numFaces[t] * 3 + 1) * comb] = vc;
+    devP->F[t + ((devP->numFaces[t]++) * 3 + 2) * comb] = vd;
 
-    devP->F[t + (devP->faces[t] * 3) * perm] = vb;
-    devP->F[t + (devP->faces[t] * 3 + 1) * perm] = vc;
-    devP->F[t + ((devP->faces[t]++) * 3 + 2) * perm] = vd;
+    devP->F[t + (devP->numFaces[t] * 3) * comb] = vb;
+    devP->F[t + (devP->numFaces[t] * 3 + 1) * comb] = vc;
+    devP->F[t + ((devP->numFaces[t]++) * 3 + 2) * comb] = vd;
 
-    int resp = graph[va*sz + vb] + graph[va*sz + vc] + graph[vb*sz + vc];
-    resp += graph[va*sz + vd] + graph[vb*sz + vd] + graph[vc*sz + vd];
-    devP->tmpMax[t] = resp;
+    int res = graph[va*sz + vb] + graph[va*sz + vc] + graph[vb*sz + vc];
+    res += graph[va*sz + vd] + graph[vb*sz + vd] + graph[vc*sz + vd];
+    devP->tmpMax[t] = res;
 }
 //-----------------------------------------------------------------------------
 /*
@@ -170,28 +165,28 @@ __device__ void generateFaceList(Node* devN, Params* devP, int graph[], int t,
 __device__ int faceDimple(Node* devN, Params* devP, int graph[], int new_vertex,
     int f, int t)
 {
-    int sz = devN->sz, perm = devN->perm;
+    int sz = devN->sz, comb = devN->comb;
 
     // Remove the chosen face and insert a new one
-    int va = devP->F[t + (f * 3) * perm],
-        vb = devP->F[t + (f * 3 + 1) * perm],
-        vc = devP->F[t + (f * 3 + 2) * perm];
+    int va = devP->F[t + (f * 3) * comb],
+        vb = devP->F[t + (f * 3 + 1) * comb],
+        vc = devP->F[t + (f * 3 + 2) * comb];
 
-    devP->F[t + (f * 3) * perm] = new_vertex,
-    devP->F[t + (f * 3 + 1) * perm] = va,
-    devP->F[t + (f * 3 + 2) * perm] = vb;
+    devP->F[t + (f * 3) * comb] = new_vertex,
+    devP->F[t + (f * 3 + 1) * comb] = va,
+    devP->F[t + (f * 3 + 2) * comb] = vb;
     
     // Insert the other two possible faces
-    devP->F[t + (devP->faces[t] * 3) * perm] = new_vertex;
-    devP->F[t + (devP->faces[t] * 3 + 1) * perm] = va;
-    devP->F[t + ((devP->faces[t]++) * 3 + 2) * perm] = vc;
+    devP->F[t + (devP->numFaces[t] * 3) * comb] = new_vertex;
+    devP->F[t + (devP->numFaces[t] * 3 + 1) * comb] = va;
+    devP->F[t + ((devP->numFaces[t]++) * 3 + 2) * comb] = vc;
 
-    devP->F[t + (devP->faces[t] * 3) * perm] = new_vertex;
-    devP->F[t + (devP->faces[t] * 3 + 1) * perm] = vb;
-    devP->F[t + ((devP->faces[t]++) * 3 + 2) * perm] = vc;
+    devP->F[t + (devP->numFaces[t] * 3) * comb] = new_vertex;
+    devP->F[t + (devP->numFaces[t] * 3 + 1) * comb] = vb;
+    devP->F[t + ((devP->numFaces[t]++) * 3 + 2) * comb] = vc;
 
-    int resp = graph[va*sz + new_vertex] + graph[vb*sz + new_vertex]
-        + graph[vc*sz + new_vertex];
+    int resp = graph[va+ sz*new_vertex] + graph[vb + sz*new_vertex]
+        + graph[vc + sz*new_vertex];
 
     return resp;
 }
@@ -202,22 +197,22 @@ __device__ int faceDimple(Node* devN, Params* devP, int graph[], int new_vertex,
     */
 __device__ int maxGainFace(Node* devN, Params* devP, int graph[], int* f, int t)
 {
-    int sz = devN->sz, perm = devN->perm;
+    int sz = devN->sz, comb = devN->comb;
     int gain = -1, vertex = -1;
 
+    int numFaces = devP->numFaces[t];
     // Iterate through the remaining vertices
     for (int new_vertex = 0; new_vertex < sz; ++new_vertex)
     {
-        if (devP->V[t + new_vertex * perm] == -1) continue;
+        if (devP->V[t + new_vertex * comb] == -1) continue;
         // Test the dimple on each face
-        int faces = devP->faces[t];
-        for (int i = 0; i < faces; ++i)
+        for (int i = 0; i < numFaces; ++i)
         {
-            int va = devP->F[t + (i * 3) * perm],
-                vb = devP->F[t + (i * 3 + 1) * perm],
-                vc = devP->F[t + (i * 3 + 2) * perm];
-            int tmpGain = graph[va*sz + new_vertex] + graph[vb*sz + new_vertex]
-                + graph[vc*sz + new_vertex];
+            int va = devP->F[t + (i * 3) * comb],
+                vb = devP->F[t + (i * 3 + 1) * comb],
+                vc = devP->F[t + (i * 3 + 2) * comb];
+            int tmpGain = graph[va + sz*new_vertex] + graph[vb + sz*new_vertex]
+                + graph[vc + sz*new_vertex];
             if (tmpGain > gain)
             {
                 gain = tmpGain;
@@ -231,49 +226,49 @@ __device__ int maxGainFace(Node* devN, Params* devP, int graph[], int* f, int t)
 //-----------------------------------------------------------------------------
 __device__ void dimpling(Node* devN, Params* devP, int graph[], int t)
 {
-    int perm = devN->perm;
-    while (devP->count[t])
+    int comb = devN->comb;
+    while (devP->remaining[t])
     {
         int f = -1;
         int vertex = maxGainFace(devN, devP, graph, &f, t);
-        devP->V[t + vertex * perm] = -1;
+        devP->V[t + vertex * comb] = -1;
         devP->tmpMax[t] += faceDimple(devN, devP, graph, vertex, f, t);
-        devP->count[t]--;
+        devP->remaining[t]--;
     }
 }
 //-----------------------------------------------------------------------------
 __device__ void copyGraph(Node *devN, Params *devP, int t)
 {
-    int faces = devP->faces[t], perm = devN->perm;
-    for (int i = 0; i < faces; ++i)
+    int numFaces = devP->numFaces[t], comb = devN->comb;
+    for (int i = 0; i < numFaces; ++i)
     {
-        int va = devP->F[t + (i * 3) * perm],
-            vb = devP->F[t + (i * 3 + 1) * perm],
-            vc = devP->F[t + (i * 3 + 2) * perm];
-        devN->F_ANS[i * 3] = va,
-        devN->F_ANS[i * 3 + 1] = vb,
-        devN->F_ANS[i * 3 + 2] = vc;
+        int va = devP->F[t + (i * 3) * comb],
+            vb = devP->F[t + (i * 3 + 1) * comb],
+            vc = devP->F[t + (i * 3 + 2) * comb];
+        devN->resFaces[i * 3] = va,
+        devN->resFaces[i * 3 + 1] = vb,
+        devN->resFaces[i * 3 + 2] = vc;
     }
 }
 //-----------------------------------------------------------------------------
 __device__ void initializeDevice(Params *devP, int sz, int t)
 {
-    devP->faces[t] = 0;
+    devP->numFaces[t] = 0;
     devP->tmpMax[t] = -1;
-    devP->count[t] = sz - 4;
+    devP->remaining[t] = sz - 4;
 }
 //-----------------------------------------------------------------------------
 __global__ void solve(Node *devN, Params devP, int *respMax, int offset)
 {
     int x = blockDim.x*blockIdx.x + threadIdx.x;
-    int sz = devN->sz, perm = devN->perm;
+    int sz = devN->sz, comb = devN->comb;
     extern __shared__ int graph[];
 
     for (int i = threadIdx.x; i < sz*sz; i += blockDim.x)
         graph[i] = devN->graph[i];
     __syncthreads();
 
-    if (x < perm)
+    if (x < comb)
     {
         initializeDevice(&devP, sz, x);
         generateVertexList(devN, &devP, x, offset);
@@ -288,7 +283,7 @@ __global__ void solve(Node *devN, Params devP, int *respMax, int offset)
     }
 }
 //-----------------------------------------------------------------------------
-int prepare()
+int prepareEnvironment()
 {
     int finalResp = -1, pos = -1;
 
@@ -296,10 +291,10 @@ int prepare()
     for (int gpu_id = 0; gpu_id < GPU_CNT; gpu_id++)
     {
         cudaSetDevice(gpu_id);
-        int range = (int)ceil(PERM / (double)GPU_CNT);
-        int perm = ((gpu_id + 1)*range > PERM ? PERM - gpu_id*range : range);
+        int range = (int)ceil(COMB / (double)GPU_CNT);
+        int comb = ((gpu_id + 1)*range > COMB ? COMB - gpu_id*range : range);
         int offset = gpu_id*range;
-        N->perm = perm;
+        N->comb = comb;
 
         int resp = -1, *tmpResp;
         gpuErrChk(cudaMalloc((void**)&tmpResp, sizeof(int)));
@@ -316,17 +311,17 @@ int prepare()
         gpuErrChk(cudaMalloc((void**)&devN, sizeof(Node)));
         gpuErrChk(cudaMemcpy(devN, N, sizeof(Node), cudaMemcpyHostToDevice));
 
-        gpuErrChk(cudaMalloc((void**)&devP.faces, perm*sizeof(int)));
-        gpuErrChk(cudaMalloc((void**)&devP.count, perm*sizeof(int)));
-        gpuErrChk(cudaMalloc((void**)&devP.tmpMax, perm*sizeof(int)));
-        gpuErrChk(cudaMalloc((void**)&devP.F, 6*SIZE*perm*sizeof(int)));
-        gpuErrChk(cudaMalloc((void**)&devP.V, SIZE*perm*sizeof(int)));
+        gpuErrChk(cudaMalloc((void**)&devP.numFaces, comb*sizeof(int)));
+        gpuErrChk(cudaMalloc((void**)&devP.remaining, comb*sizeof(int)));
+        gpuErrChk(cudaMalloc((void**)&devP.tmpMax, comb*sizeof(int)));
+        gpuErrChk(cudaMalloc((void**)&devP.F, 6*SIZE*comb*sizeof(int)));
+        gpuErrChk(cudaMalloc((void**)&devP.V, SIZE*comb*sizeof(int)));
 
-        dim3 blocks(perm/THREADS + 1, 1);
+        dim3 blocks(comb/THREADS + 1, 1);
         dim3 threads(THREADS, 1);
 
         printf("Kernel %d launched with %d blocks, each w/ %d threads\n",
-            gpu_id, range/THREADS + 1, THREADS);
+            gpu_id+1, range/THREADS + 1, THREADS);
         solve <<<blocks, threads, SIZE*SIZE*sizeof(int)>>>(devN, devP, tmpResp, offset);
         gpuErrChk(cudaDeviceSynchronize());
 
@@ -347,15 +342,13 @@ int prepare()
         }
 
         if (pos == gpu_id)
-        {
-            gpuErrChk(cudaMemcpy(&F, devN->F_ANS, 6*MAX*sizeof(int),
+            gpuErrChk(cudaMemcpy(&F, devN->resFaces, 6*MAX*sizeof(int),
                 cudaMemcpyDeviceToHost));
-        }
 
         printf("Freeing memory...\n");
         gpuErrChk(cudaFree(devN));
-        gpuErrChk(cudaFree(devP.faces));
-        gpuErrChk(cudaFree(devP.count));
+        gpuErrChk(cudaFree(devP.numFaces));
+        gpuErrChk(cudaFree(devP.remaining));
         gpuErrChk(cudaFree(devP.tmpMax));
         gpuErrChk(cudaFree(devP.F));
         gpuErrChk(cudaFree(devP.V));
@@ -371,7 +364,7 @@ int prepare()
     data[] ---> Temporary array to store a current combination
     i      ---> Index of current element in vertices[]
 */
-void combineUntil(int index, vector<int>& data, int i)
+void combineUntil(int index, int* data, int i)
 {
     if (index == C)
     {
@@ -390,7 +383,7 @@ void combineUntil(int index, vector<int>& data, int i)
 //-----------------------------------------------------------------------------
 void combine()
 {
-    vector<int> data(C);
+    int data[C];
     combineUntil(0, data, 0);
 }
 //-----------------------------------------------------------------------------
@@ -399,12 +392,12 @@ void combine()
     */
 void sizeDefinitions()
 {
-    for (int i = 6; i <= MAX; ++i)
+    for (int i = 4; i <= MAX; ++i)
     {
         int resp = 1;
         for (int j = i-3; j <= i; ++j) resp *= j;
         resp /= 24;
-        bib[i-1] = resp;
+        numComb[i-1] = resp;
     }
 }
 //-----------------------------------------------------------------------------
@@ -422,7 +415,7 @@ void readInput()
 {
     int x;
     scanf("%d", &SIZE);
-    PERM = bib[SIZE-1];
+    COMB = numComb[SIZE-1];
 
     N = (Node*)malloc(sizeof(Node));
     N->sz = SIZE;
@@ -459,7 +452,7 @@ int main(int argv, char** argc)
     }
 
     double start = getTime();
-    int respMax = prepare();
+    int respMax = prepareEnvironment();
     double stop = getTime();
 
     //reconstruct the graph given the regions of the graph
@@ -481,7 +474,7 @@ int main(int argv, char** argc)
     }
 
     printElapsedTime(start, stop);
-    cout << "Maximum weight found: " << respMax << endl;
+    printf("Maximum weight found: %d\n", respMax);
     free(N);
 
     return 0;

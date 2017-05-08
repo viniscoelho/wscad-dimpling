@@ -1,7 +1,3 @@
-#include <iostream>
-#include <iomanip>
-#include <algorithm>
-#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -10,7 +6,7 @@
 #define THREADS 1024 // 2^10
 #define MAX 85
 #define MAXS MAX*MAX
-#define PERM_MAX (MAX*(MAX-1)*(MAX-2)*(MAX-3))/24
+#define COMB_MAX (MAX*(MAX-1)*(MAX-2)*(MAX-3))/24
 
 #define gpuErrChk(ans){ gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, char *file, int line, bool abort = true)
@@ -28,7 +24,7 @@ using namespace std;
 struct Node
 {
     int sz, qtd;
-    int graph[MAXS], TMP[6*MAX], seeds[PERM_MAX*C];
+    int graph[MAXS], TMP[6*MAX], seeds[COMB_MAX*C];
 };
 
 struct Params
@@ -45,12 +41,12 @@ struct Params
     T           ---> Output graph for an instance
     R           ---> Output graph for an possible optimal solution
     F           ---> List containing triangular faces of an instance
-    seeds       ---> Permutations of possible starting 4-cliques
+    seeds       ---> Combinations of possible starting 4-cliques
     graph       ---> The graph itself
 */
 double start, stop;
 int R[MAX][MAX], F[8*MAX], bib[MAX];
-int SIZE, BLOCKS, PERM, qtd = 0;
+int SIZE, BLOCKS, COMB, qtd = 0;
 
 Node *N;
 
@@ -176,12 +172,13 @@ __device__ int maxGainFace(Node* devN, Params* devP, int* f, int t)
 {
     int sz = devN->sz;
     int gain = -1, vertex = -1;
+
+    int faces = devP[t].faces;
     // Iterate through the remaining vertices
     for (int new_vertex = 0; new_vertex < sz; ++new_vertex)
     {
         if (devP[t].V[new_vertex] == -1) continue;
         // Test the dimple on each face
-        int faces = devP[t].faces;
         for (int i = 0; i < faces; ++i)
         {
             int va = devP[t].F[i*3], vb = devP[t].F[i*3 + 1], vc = devP[t].F[i*3 + 2];
@@ -221,10 +218,10 @@ __global__ void solve(Node *devN, Params *devP, int *respMax, int *idx)
 {
     int x = blockDim.x*blockIdx.x + threadIdx.x;
     int sz = devN->sz;
-    int perm = devN->qtd;
+    int comb = devN->qtd;
     __syncthreads();
 
-    if (x < perm)
+    if (x < comb)
     {
         initializeDevice(devP, devN->sz, x);
         generateVertexList(devN, devP, x);
@@ -250,7 +247,7 @@ int prepare()
     Node *devN;
     Params *devP;
 
-    size_t sz = PERM * sizeof(Params);
+    size_t sz = COMB * sizeof(Params);
     gpuErrChk(cudaMalloc((void**) &devP, sz));
     gpuErrChk(cudaMalloc((void**) &devN, sizeof(Node)));
     gpuErrChk(cudaMemcpy(devN, N, sizeof(Node), cudaMemcpyHostToDevice));
@@ -276,7 +273,7 @@ int prepare()
     data[] ---> Temporary array to store a current combination
     i      ---> Index of current element in vertices[]
 */
-void combineUntil(int index, vector<int>& data, int i)
+void combineUntil(int index, int* data, int i)
 {
     if (index == C)
     {
@@ -295,7 +292,7 @@ void combineUntil(int index, vector<int>& data, int i)
 //-----------------------------------------------------------------------------
 void combine()
 {
-    vector<int> data(C);
+    int data[C];
     combineUntil(0, data, 0);
 }
 //-----------------------------------------------------------------------------
@@ -304,7 +301,7 @@ void combine()
     */
 void sizeDefinitions()
 {
-    for (int i = 6; i <= MAX; ++i)
+    for (int i = 4; i <= MAX; ++i)
     {
         int resp = 1;
         for (int j = i-3; j <= i; ++j) resp *= j;
@@ -327,12 +324,12 @@ void readInput()
 {
     int x;
     scanf("%d", &SIZE);
-    PERM = bib[SIZE-1];
-    BLOCKS = PERM/THREADS + 1;
+    COMB = bib[SIZE-1];
+    BLOCKS = COMB/THREADS + 1;
 
     N = (Node*)malloc(sizeof(Node));
     N->sz = SIZE;
-    N->qtd = PERM;
+    N->qtd = COMB;
 
     for (int i = 0; i < SIZE; ++i)
     {

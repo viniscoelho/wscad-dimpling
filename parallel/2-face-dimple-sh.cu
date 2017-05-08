@@ -1,7 +1,3 @@
-#include <iostream>
-#include <iomanip>
-#include <algorithm>
-#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -177,12 +173,13 @@ __device__ int maxGainFace(Node* devN, Params* devP, int* f, int graph[], int t)
 {
     int sz = devN->sz;
     int gain = -1, vertex = -1;
+
+    int faces = devP[t].faces;
     // Iterate through the remaining vertices
     for (int new_vertex = 0; new_vertex < sz; ++new_vertex)
     {
         if (devP[t].V[new_vertex] == -1) continue;
         // Test the dimple on each face
-        int faces = devP[t].faces;
         for (int i = 0; i < faces; ++i)
         {
             int va = devP[t].F[i*3], vb = devP[t].F[i*3 + 1], vc = devP[t].F[i*3 + 2];
@@ -222,7 +219,7 @@ __global__ void solve(Node *devN, Params *devP, int *respMax, int *idx)
 {
     int x = blockDim.x*blockIdx.x + threadIdx.x;
     int sz = devN->sz;
-    int perm = devN->qtd;
+    int comb = devN->qtd;
 
     extern __shared__ int graph[];
     for (int i = 0; i < sz; ++i)
@@ -232,7 +229,7 @@ __global__ void solve(Node *devN, Params *devP, int *respMax, int *idx)
         }
     __syncthreads();
 
-    if (x < perm)
+    if (x < comb)
     {
         initializeDevice(devP, devN->sz, x);
         generateVertexList(devN, devP, x);
@@ -284,7 +281,7 @@ int prepare()
     data[] ---> Temporary array to store a current combination
     i      ---> Index of current element in vertices[]
 */
-void combineUntil(int index, vector<int>& data, int i)
+void combineUntil(int index, int* data, int i)
 {
     if (index == C)
     {
@@ -303,7 +300,7 @@ void combineUntil(int index, vector<int>& data, int i)
 //-----------------------------------------------------------------------------
 void combine()
 {
-    vector<int> data(C);
+    int data[C];
     combineUntil(0, data, 0);
 }
 //-----------------------------------------------------------------------------
@@ -312,7 +309,7 @@ void combine()
     */
 void sizeDefinitions()
 {
-    for (int i = 6; i <= MAX; ++i)
+    for (int i = 4; i <= MAX; ++i)
     {
         int resp = 1;
         for (int j = i-3; j <= i; ++j) resp *= j;

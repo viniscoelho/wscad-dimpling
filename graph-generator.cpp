@@ -1,5 +1,5 @@
-#include <iostream>
 #include <cstdio>
+#include <iostream>
 
 using namespace std;
 
@@ -11,8 +11,8 @@ int main()
     srand(time(NULL));
     cout << n << "\n";
     for (int i = 0; i < n; ++i)
-        for (int j = i+1; j < n; ++j)
+        for (int j = i + 1; j < n; ++j)
             cout << rand() % 200 << " ";
-        cout << "\n";
+    cout << "\n";
     return 0;
 }
